@@ -12,7 +12,7 @@ An AI-powered, multi-turn emergency response system built on AWS. Swift Aid list
 
 # Components
 
-1. Contact Flow (Amazon Connect)
+## Contact Flow (Amazon Connect)
 Greeting: Text-to-speech prompt.
 
 Start/Stop Media Streaming: Streams raw PCM @ 8 kHz into a Kinesis Data Stream (SwiftAI‐AudioStream), keyed by ContactId.
@@ -23,7 +23,7 @@ Play Prompt: Plays the S3 URL via the $['Attributes']['AudioUri'] expression.
 
 Invoke Lambda (ClearAudioUri): Clears the URL so the loop can repeat.
 
-2. swiftresponse Lambda
+## swiftresponse Lambda
 Trigger: Kinesis Data Stream (audio chunks).
 
 Function:
@@ -40,7 +40,7 @@ amazon-transcribe & awscrt (packaged via a Lambda layer).
 
 IAM: kinesis:GetRecords, transcribe:StartStreamTranscription, dynamodb:PutItem.
 
-3. SwiftAIOrchestrator Lambda
+## SwiftAIOrchestrator Lambda
 Trigger: DynamoDB Stream on SwiftAI-Conversations (new image).
 
 Function:
@@ -65,7 +65,7 @@ AUDIO_BUCKET=swiftai-responses
 AWS_REGION=us-east-1
 
 
-4. ClearAudioUri Lambda
+## ClearAudioUri Lambda
 
 ⚙️ Setup & Deployment
 Provision AWS resources
