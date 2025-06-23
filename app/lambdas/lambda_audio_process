@@ -1,0 +1,155 @@
+import base64
+import boto3
+import time
+import json
+import os
+from botocore.exceptions import ClientError
+import uuid
+
+# Environment Variables
+REGION = os.environ.get("AWS_REGION", "us-east-1")
+TABLE_NAME = os.environ.get("DYNAMODB_TABLE", "SwiftAI-Conversations")
+BUCKET_NAME = os.environ.get("S3_BUCKET", "SwiftAI-Conversations")
+
+# AWS Clients
+dynamodb = boto3.client("dynamodb", region_name=REGION)
+s3 = boto3.client("s3", region_name=REGION)
+transcribe = boto3.client("transcribe", region_name=REGION)
+
+def save_to_dynamodb(contact_id, text, speaker="System", metadata=None):
+    """Save transcript to DynamoDB with error handling"""
+    try:
+        item = {
+            "ContactId": {"S": contact_id},
+            "Timestamp": {"N": str(int(time.time() * 1000))},
+            "Speaker": {"S": speaker},
+            "Text": {"S": text}
+        }
+        
+        if metadata:
+            item["Metadata"] = {"S": json.dumps(metadata)}
+            
+        dynamodb.put_item(TableName=TABLE_NAME, Item=item)
+        print(f"✓ Saved to DynamoDB: {speaker}: {text}")
+        return True
+    except ClientError as e:
+        print(f"✗ DynamoDB error: {e}")
+        return False
+
+def start_transcription_job(audio_location, contact_id):
+    """Start Amazon Transcribe job for audio files"""
+    try:
+        job_name = f"transcribe-{contact_id}-{int(time.time())}"
+        
+        # For Connect recordings, the location is typically an S3 URI
+        transcribe.start_transcription_job(
+            TranscriptionJobName=job_name,
+            Media={'MediaFileUri': audio_location},
+            MediaFormat='wav',  # Connect typically uses WAV
+            LanguageCode='en-US',
+            Settings={
+                'ShowSpeakerLabels': True,
+                'MaxSpeakerLabels': 2
+            }
+        )
+        
+        print(f"✓ Started transcription job: {job_name}")
+        return job_name
+    except Exception as e:
+        print(f"✗ Transcription error: {e}")
+        return None
+
+def process_kinesis_audio_chunk(data, contact_id):
+    """Process real-time audio chunks from Kinesis"""
+    try:
+        
+        # Save a processing marker to DynamoDB
+        save_to_dynamodb(
+            contact_id,
+            "Audio chunk received and processing...",
+            "System",
+            {"chunk_size": len(data), "timestamp": int(time.time())}
+        )
+        
+        return True
+    except Exception as e:
+        print(f"✗ Audio processing error: {e}")
+        return False
+
+def lambda_handler(event, context):
+    """Main handler for Kinesis audio stream"""
+    print(f"📥 Received {len(event.get('Records', []))} records")
+    
+    processed_count = 0
+    error_count = 0
+    
+    try:
+        for record in event.get("Records", []):
+            try:
+                # Get contact ID from partition key
+                contact_id = record.get("kinesis", {}).get("partitionKey")
+                if not contact_id:
+                    print("⚠️ No contact ID found, skipping record")
+                    continue
+                
+                # Handle different types of Kinesis data
+                if "data" in record.get("kinesis", {}):
+                    # Real-time audio data
+                    encoded_data = record["kinesis"]["data"]
+                    audio_data = base64.b64decode(encoded_data)
+                    
+                    success = process_kinesis_audio_chunk(audio_data, contact_id)
+                    if success:
+                        processed_count += 1
+                    else:
+                        error_count += 1
+                
+                # Handle Connect contact records
+                elif "eventName" in record:
+                    # This is a Connect contact record
+                    contact_data = record.get("dynamodb", {}).get("NewImage", {})
+                    process_connect_record(contact_data, contact_id)
+                    processed_count += 1
+                    
+            except Exception as e:
+                print(f"✗ Error processing record: {e}")
+                error_count += 1
+                continue
+        
+        return {
+            "statusCode": 200,
+            "body": json.dumps({
+                "message": "Audio processing completed",
+                "processed": processed_count,
+                "errors": error_count
+            })
+        }
+        
+    except Exception as e:
+        print(f"✗ Handler error: {e}")
+        return {
+            "statusCode": 200,  # Don't fail the entire batch
+            "body": json.dumps({"error": str(e), "processed": processed_count})
+        }
+
+def process_connect_record(contact_data, contact_id):
+    """Process Connect contact record data"""
+    try:
+        # Extract basic contact info
+        channel = contact_data.get("Channel", {}).get("S", "UNKNOWN")
+        
+        metadata = {
+            "contact_id": contact_id,
+            "channel": channel,
+            "processing_time": int(time.time())
+        }
+        
+        save_to_dynamodb(
+            contact_id,
+            f"Contact record processed - Channel: {channel}",
+            "System",
+            metadata
+        )
+        
+    except Exception as e:
+        print(f"✗ Connect record processing error: {e}")

@@ -1,0 +1,58 @@
+import os
+import boto3
+from botocore.exceptions import ClientError
+
+# Configuration
+CONNECT_INSTANCE_ID = os.environ.get("CONNECT_INSTANCE_ID", "9dd5e7ec-7a58-4847-809c-8729fc6691b4")
+connect = boto3.client("connect")
+
+def lambda_handler(event, context):
+    """Clear AudioUri attribute from Connect contact"""
+    try:
+        # Extract ContactId from event
+        contact_data = event.get("Details", {}).get("ContactData", {})
+        contact_id = contact_data.get("ContactId")
+        
+        if not contact_id:
+            print("✗ ContactId not found in event")
+            return {
+                "success": False,
+                "error": "ContactId not found"
+            }
+        
+        print(f"🧹 Clearing AudioUri for contact: {contact_id}")
+        
+        # Clear the AudioUri attribute
+        connect.update_contact_attributes(
+            InstanceId=CONNECT_INSTANCE_ID,
+            ContactId=contact_id,
+            Attributes={"AudioUri": ""}
+        )
+        
+        print("✓ AudioUri cleared successfully")
+        
+        return {
+            "success": True,
+            "contactId": contact_id,
+            "message": "AudioUri cleared"
+        }
+        
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+        error_message = e.response.get('Error', {}).get('Message', str(e))
+        
+        print(f"✗ Connect API error [{error_code}]: {error_message}")
+        
+        return {
+            "success": False,
+            "error": f"Connect API error: {error_message}",
+            "errorCode": error_code
+        }
+        
+    except Exception as e:
+        print(f"✗ Unexpected error: {e}")
+        
+        return {
+            "success": False,
+            "error": f"Unexpected error: {str(e)}"
+        }
